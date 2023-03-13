@@ -58,12 +58,32 @@ def _label_filename(filename):
               labels.append((cat, transform_name(name)))
     return labels
 
+def process_popular_categories(files, output_file, min_products):
+    label_dict = {}
+    with multiprocessing.Pool() as p:
+        all_labels = tqdm(p.imap(_label_filename, files), total=len(files))
+        for label_list in all_labels:
+            for (cat, name) in label_list:
+                if not (cat in label_dict.keys()):
+                    label_dict[cat] = []
+                else:
+                    label_dict[cat].append(name)
+    with open(output_file, 'w') as output:
+        for cat in label_dict.keys():
+            if len(label_dict[cat]) >= min_products:
+                print("popular category: ", cat, len(label_dict[cat]))
+                for name in label_dict[cat]:
+                    output.write(f'__label__{cat} {name}\n')
+
 if __name__ == '__main__':
     files = glob.glob(f'{directory}/*.xml')
     print("Writing results to %s" % output_file)
-    with multiprocessing.Pool() as p:
-        all_labels = tqdm(p.imap(_label_filename, files), total=len(files))
-        with open(output_file, 'w') as output:
-            for label_list in all_labels:
-                for (cat, name) in label_list:
-                    output.write(f'__label__{cat} {name}\n')
+    if (min_products > 0):
+        process_popular_categories(files, output_file, min_products)
+    else:
+        with multiprocessing.Pool() as p:
+            all_labels = tqdm(p.imap(_label_filename, files), total=len(files))
+            with open(output_file, 'w') as output:
+                for label_list in all_labels:
+                    for (cat, name) in label_list:
+                        output.write(f'__label__{cat} {name}\n')
