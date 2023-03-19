@@ -12,11 +12,17 @@ import pandas as pd
 import fileinput
 import logging
 import sys
-
+import fasttext
+import nltk
+import re
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
+
+model = fasttext.load_model('/workspace/datasets/fasttext/query_classifier.bin')
+category_threshold = 0.3
+stemmer = nltk.stem.PorterStemmer()
 
 # expects clicks and impressions to be in the row
 def create_prior_queries_from_group(
@@ -48,6 +54,14 @@ def create_prior_queries(doc_ids, doc_id_weights,
                 pass  # nothing to do in this case, it just means we can't find priors for this doc
     return click_prior_query
 
+def get_filters(categories):
+    return [
+        {
+            "terms": {
+                "categoryPathIds.keyword": categories
+                }
+        }
+        ]
 
 # Hardcoded query here.  Better to use search templates or other query config.
 def create_query(user_query, click_prior_query, filters, sort="_score", sortDir="desc", size=10, source=None, use_synonyms=False):
@@ -189,12 +203,44 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
     print(query_obj)
     return query_obj
 
+def normalize_tokens(text):
+    lower = text.lower()
+    alpha_num = re.sub('[^0-9a-zA-Z]+', ' ', lower)
+    trim_spaces = re.sub(' +', ' ', alpha_num)
+    tokens = trim_spaces.split()
+    stemmed_tokens = [stemmer.stem(token) for token in tokens]
+    return ' '.join(stemmed_tokens)
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", use_synonyms=False):
+def get_categories(query):
+    normalized_query = normalize_tokens(query)
+    print(f"Normalized query: {normalized_query}")
+    categories, probs = model.predict(normalized_query)
+
+    print(categories)
+    print(probs)
+
+    cat_len = len(categories)
+    category_list = []
+
+    for i in range(0, cat_len):
+        if probs[i] > category_threshold:
+            curr_cat = categories[i].replace("__label__", "")
+            category_list.append(curr_cat)
+        else:
+            break
+    return category_list
+
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", use_synonyms=False, use_categories=False):
     #### W3: classify the query
+    filters = []
+    if use_categories:
+        categories = get_categories(user_query)
     #### W3: create filters and boosts
+        if categories:
+            filters = get_filters(categories)
+        
     # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, click_prior_query=None, filters=[], sort=sort, sortDir=sortDir, source=["name", "shortDescription"], use_synonyms=use_synonyms)
+    query_obj = create_query(user_query, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription"], use_synonyms=use_synonyms)
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
@@ -217,6 +263,7 @@ if __name__ == "__main__":
     general.add_argument('--user',
                          help='The OpenSearch admin.  If this is set, the program will prompt for password too. If not set, use default of admin/admin')
     general.add_argument("--synonyms", action=argparse.BooleanOptionalAction, help="Whether to query the product title or synonyms")
+    general.add_argument("--categories", action=argparse.BooleanOptionalAction, help="Whether to use categories")
 
     args = parser.parse_args()
 
@@ -250,7 +297,7 @@ if __name__ == "__main__":
         query = line.rstrip()
         if query == "Exit":
             break
-        search(client=opensearch, user_query=query, index=index_name, use_synonyms=args.synonyms)
+        search(client=opensearch, user_query=query, index=index_name, use_synonyms=args.synonyms, use_categories=args.categories)
 
         print(query_prompt)
 

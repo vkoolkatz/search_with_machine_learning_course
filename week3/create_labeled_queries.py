@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
 import csv
+import re
 
 # Useful if you want to perform stemming.
 import nltk
@@ -16,7 +17,7 @@ output_file_name = r'/workspace/datasets/fasttext/labeled_queries.txt'
 
 parser = argparse.ArgumentParser(description='Process arguments.')
 general = parser.add_argument_group("general")
-general.add_argument("--min_queries", default=1,  help="The minimum number of queries per category label (default is 1)")
+general.add_argument("--min_queries", default=1000,  help="The minimum number of queries per category label (default is 1)")
 general.add_argument("--output", default=output_file_name, help="the file to output to")
 
 args = parser.parse_args()
@@ -48,9 +49,41 @@ parents_df = pd.DataFrame(list(zip(categories, parents)), columns =['category', 
 queries_df = pd.read_csv(queries_file_name)[['category', 'query']]
 queries_df = queries_df[queries_df['category'].isin(categories)]
 
+def normalize_tokens(text):
+    lower = text.lower()
+    alpha_num = re.sub('[^0-9a-zA-Z]+', ' ', lower)
+    trim_spaces = re.sub(' +', ' ', alpha_num)
+    tokens = trim_spaces.split()
+    stemmed_tokens = [stemmer.stem(token) for token in tokens]
+    return ' '.join(stemmed_tokens)
+
 # IMPLEMENT ME: Convert queries to lowercase, and optionally implement other normalization, like stemming.
+queries_df['query'] = queries_df['query'].apply(normalize_tokens)
+
+category_count_df = queries_df.groupby('category').size().reset_index(name='count')
+size_min_categories = category_count_df[category_count_df['count'] < min_queries].size
+
+queries_df = queries_df.merge(category_count_df, how='left', on='category')
+queries_df = queries_df.sort_values(by=['count', 'category'])
+queries_df = queries_df.drop('count', axis=1)
 
 # IMPLEMENT ME: Roll up categories to ancestors to satisfy the minimum number of queries per category.
+
+iteration = 0
+while size_min_categories > 0:
+    iteration = iteration + 1
+    print(f"Iteration: {iteration}")
+
+    for index, row in category_count_df.iterrows():
+        if row['count'] < min_queries:
+            queries_df.loc[queries_df['category'] == row['category'], ['category']] = parents_df.loc[parents_df['category'] == row['category'], ['category']]
+
+    category_count_df = queries_df.groupby('category').size().reset_index(name='count')
+    size_min_categories = category_count_df[category_count_df['count'] < min_queries].size
+
+    queries_df = queries_df.merge(category_count_df, how='left', on='category')
+    queries_df = queries_df.sort_values(by=['count', 'category'])
+    queries_df = queries_df.drop('count', axis=1)
 
 # Create labels in fastText format.
 queries_df['label'] = '__label__' + queries_df['category']
